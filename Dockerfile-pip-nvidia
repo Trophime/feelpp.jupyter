@@ -1,0 +1,150 @@
+# Copyright (c) Jupyter Development Team.
+# Distributed under the terms of the Modified BSD License.
+
+# Ubuntu 22.04 (jammy)
+# https://hub.docker.com/_/ubuntu/tags?page=1&name=jammy
+# ARG ROOT_CONTAINER=ubuntu:22.04
+ARG ROOT_CONTAINER=trophime/opengl:1.7.0-glvnd-runtime-ubuntu24.04
+# ARG ROOT_CONTAINER=trophime/opengl:1.6.0-glvnd-runtime-debian12
+
+FROM $ROOT_CONTAINER
+
+LABEL maintainer="Jupyter Project <jupyter@googlegroups.com>"
+ARG NB_USER="jovyan"
+ARG NB_UID="1001"
+ARG NB_GID="100"
+
+# set proper groups for opengl support
+ARG VGLUSERS="vglusers"
+ARG VGLUSERS_GID="1001"
+
+# Fix: https://github.com/hadolint/hadolint/wiki/DL4006
+# Fix: https://github.com/koalaman/shellcheck/wiki/SC3014
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+USER root
+
+# Install all OS dependencies for the Server that starts
+# but lacks all features (e.g., download as all possible file formats)
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update --yes && \
+    # - `apt-get upgrade` is run to patch known vulnerabilities in system packages
+    #   as the Ubuntu base image is rebuilt too seldom sometimes (less than once a month)
+    apt-get upgrade --yes && \
+    apt-get install --yes --no-install-recommends \
+    # - bzip2 is necessary to extract the micromamba executable.
+    bzip2 \
+    ca-certificates \
+    locales \
+    # - `netbase` provides /etc/{protocols,rpc,services}, part of POSIX
+    #   and required by various C functions like getservbyname and getprotobyname
+    #   https://github.com/jupyter/docker-stacks/pull/2129
+    netbase \
+    sudo \
+    # - `tini` is installed as a helpful container entrypoint,
+    #   that reaps zombie processes and such of the actual executable we want to start
+    #   See https://github.com/krallin/tini#why-tini for details
+    tini \
+    wget && \
+    apt-get clean && rm -rf /var/lib/apt/lists/* && \
+    echo "en_US.UTF-8 UTF-8" > /etc/locale.gen && \
+    echo "C.UTF-8 UTF-8" >> /etc/locale.gen && \
+    locale-gen
+
+# Install python and feelpp
+RUN apt-get update --yes && \
+    apt-get -y install python-is-python3 python3-venv python3-xvfbwrapper && \
+    apt-get -y install libpci3 mesa-utils libegl1 libegl1-mesa-dev libxrender1 xvfb && \
+    apt-get -y install nodejs nmap && \
+    apt-get -y install wget curl gpg sudo && \
+    wget -qO - http://apt.feelpp.org/apt.gpg | apt-key add && \
+    echo "deb http://apt.feelpp.org/ubuntu/noble noble latest" | sudo tee -a /etc/apt/sources.list.d/feelpp.list && \
+    apt-get upgrade 
+    
+# eventually add a web browser
+# RUN apt-get -y install firefox-esr 
+
+# Configure environment
+ENV SHELL=/bin/bash \
+    NB_USER="${NB_USER}" \
+    NB_UID=${NB_UID} \
+    NB_GID=${NB_GID} \
+    LC_ALL=C.UTF-8 \
+    LANG=C.UTF-8 \
+    LANGUAGE=C.UTF-8
+ENV PATH="/home/${NB_USER}/jupyterlab-env/bin:${PATH}" \
+    HOME="/home/${NB_USER}"
+    
+
+# Copy a script that we will use to correct permissions after running certain commands
+COPY fix-permissions /usr/local/bin/fix-permissions
+RUN chmod a+rx /usr/local/bin/fix-permissions
+
+# Enable prompt color in the skeleton .bashrc before creating the default NB_USER
+# hadolint ignore=SC2016
+RUN sed -i 's/^#force_color_prompt=yes/force_color_prompt=yes/' /etc/skel/.bashrc
+
+# Create NB_USER with name jovyan user with UID=1000 and in the 'users' group
+# and make sure these dirs are writable by the `users` group.
+#set up user so that we do not run as root
+RUN useradd --no-log-init --create-home --shell /bin/bash --uid "${NB_UID}" --no-user-group "${NB_USER}" && \
+    usermod -a -G sudo,video ${NB_USER}  && \
+    if [ $(getent group ${VGLUSERS_GID}) ]; then echo "${VGLUSERS} exists"; else groupadd -g ${VGLUSERS_GID} ${VGLUSERS}; fi&& \
+    usermod -a -G ${VGLUSERS} ${NB_USER}  && \
+    mkdir -p  /etc/sudoers.d/ && \
+    echo "feelpp ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/${NB_USER}
+
+# RUN echo "auth requisite pam_deny.so" >> /etc/pam.d/su && \
+#     sed -i.bak -e 's/^%admin/#%admin/' /etc/sudoers && \
+#     sed -i.bak -e 's/^%sudo/#%sudo/' /etc/sudoers && \
+#     useradd --no-log-init --create-home --shell /bin/bash --uid "${NB_UID}" --no-user-group "${NB_USER}" && \
+#     groupadd -g ${VGLUSERS_GID} vglusers && \
+#     usermod -a -G video ${NB_USER}  && \
+#     usermod -a -G ${VGLUSERS} ${NB_USER}  && \
+#     chmod g+w /etc/passwd && \
+#     fix-permissions "/home/${NB_USER}"
+
+# JUPYTER_TOKEN=token
+ENV JUPYTER_PORT=8888
+EXPOSE $JUPYTER_PORT
+
+USER ${NB_UID}
+
+# Setup work directory for backward-compatibility
+RUN mkdir "/home/${NB_USER}/work" && \
+    fix-permissions "/home/${NB_USER}"
+
+# setup virtualenv for jupyter
+RUN cd /home/${NB_USER} && \
+    python3 -m venv --system-site-packages /home/${NB_USER}/jupyterlab-env && \
+    . jupyterlab-env/bin/activate && \
+    python3 -m pip install jupyterhub jupyterlab nbclassic notebook jupyter-server-proxy trame-jupyter-extension && \
+    python3 -m pip install pyvista[all] && \
+    python3 -m pip install gmsh && \
+    jupyter server --generate-config && \
+    jupyter lab clean && \
+    deactivate
+
+
+# Copy local files as late as possible to avoid cache busting
+COPY run-hooks.sh start.sh /usr/local/bin/
+
+USER root
+
+# Create dirs for startup hooks
+RUN mkdir /usr/local/bin/start-notebook.d && \
+    mkdir /usr/local/bin/before-notebook.d
+
+
+# Switch back to jovyan to avoid accidental container runs as root
+USER ${NB_UID}
+COPY start-venv.sh ${HOME}
+
+WORKDIR "${HOME}"
+
+# Configure container entrypoint
+ENTRYPOINT ["tini", "-g", "--", "./start-venv.sh"]
+
+# docker run -it --rm --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all  -e DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix -p 8888:8888 --name jupylab jupylab:pip
+# to get access from outside the container: jupyter lab  --ip="0.0.0.0"
+# chromium -incognito http://127.0.0.1:8888/lab?token=493c2f3e07fbbde3e31ef24b055ce5bfe4bb9d6dd285af59
