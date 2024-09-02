@@ -2,26 +2,28 @@
 
 ## Build container
 
-* with nvidia support:
-
-```docker build -t jupylab:pip-nvidia -f Dockerfile-pip-nvidia .```
-
-* without:
 
 ```docker build -t jupylab:pip -f Dockerfile-pip .```
 
-* build options:
-** User setup: 
-*** NB_USER=jupyternb
-*** NB_UID=1000
-*** NB_GID=100
 
 [NOTE]
 ====
 Check out group ownership of /dev/nvidia* on your host.
 Adjust the docker build args to refletc this situation.
 
-You can correct the docker container setup by running the following script:...
+You can correct the docker container setup by running the following script as sudoers:
+
+```
+export VLGUSERS="vglusers"
+export VGLUSERS_id=...
+
+if [ $(getent group ${VGLUSERS_GID}) ]; then
+   echo "${VGLUSERS} exists";
+else
+   sudo groupadd -g ${VGLUSERS_GID} ${VGLUSERS};
+fi
+sudo usermod -a -G ${VGLUSERS} feelpp
+```
 
 ====
 
@@ -31,17 +33,34 @@ You can correct the docker container setup by running the following script:...
 
 ### Use build docker container
 
+* To allow display from the container
+
+```
+xhost +local:root
+```
+
 * To start jupyter lab with nvidia:
 
-```docker run -it --rm --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all  -e DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix -p 8888:8888 --name jupylab jupylab:pip-nvidia```
+```
+docker run -it --rm --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all  -e DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix -p 8888:8888 --name jupylab jupylab:pip
+```
 
 * To start jupyter lab without nvidia support:
 
-```docker run -it --rm  --network=host -p 8888:8888 --name jupylab jupylab:pip```
+```
+docker run -it --rm  --network=host -p 8888:8888 --name jupylab jupylab:pip
+```
+
+* Once you have stopped the container:
+
+```
+xhost +local:root
+```
 
 * From the host,
 
 ```chromium -incognito http://localhost:$ JUPYTER_PORT/lab?token=$JUPYTER_TOKEN```
+```firefox --private-window http://localhost:$ JUPYTER_PORT/lab?token=$JUPYTER_TOKEN```
 
 get JUPYTER_TOKEN and JUPYTER_PORT from the command line
 example:

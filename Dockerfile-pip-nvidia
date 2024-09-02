@@ -15,6 +15,8 @@ ARG NB_UID="1001"
 ARG NB_GID="100"
 
 # set proper groups for opengl support
+# only vald for build on lncmi machine
+# shall add a script to correct this at runtime
 ARG VGLUSERS="vglusers"
 ARG VGLUSERS_GID="1001"
 
@@ -26,7 +28,11 @@ USER root
 
 # Install all OS dependencies for the Server that starts
 # but lacks all features (e.g., download as all possible file formats)
-ENV DEBIAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=en_US.UTF-8 \
+    LANGUAGE=en_US.UTF-8 \
+    LC_ALL=C.UTF-8
+    
 RUN apt-get update --yes && \
     # - `apt-get upgrade` is run to patch known vulnerabilities in system packages
     #   as the Ubuntu base image is rebuilt too seldom sometimes (less than once a month)
@@ -46,10 +52,7 @@ RUN apt-get update --yes && \
     #   See https://github.com/krallin/tini#why-tini for details
     tini \
     wget && \
-    apt-get clean && rm -rf /var/lib/apt/lists/* && \
-    echo "en_US.UTF-8 UTF-8" > /etc/locale.gen && \
-    echo "C.UTF-8 UTF-8" >> /etc/locale.gen && \
-    locale-gen
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install python and feelpp
 RUN apt-get update --yes && \
@@ -58,9 +61,18 @@ RUN apt-get update --yes && \
     apt-get -y install nodejs nmap && \
     apt-get -y install wget curl gpg sudo && \
     wget -qO - http://apt.feelpp.org/apt.gpg | apt-key add && \
-    echo "deb http://apt.feelpp.org/ubuntu/noble noble latest" | sudo tee -a /etc/apt/sources.list.d/feelpp.list && \
-    apt-get upgrade 
-    
+    if [ ! -f /etc/apt/sources.list.d/feelpp.list ]; then \
+       echo "deb http://apt.feelpp.org/ubuntu/noble noble latest" > /etc/apt/sources.list.d/feelpp.list; \
+       apt-get update --yes; \
+       apt-get -y install  --no-install-recommends \
+               python3-feelpp-toolboxes-coefficientformpdes \
+       	       python3-feelpp-toolboxes-thermoelectric python3-feelpp-toolboxes-electric python3-feelpp-toolboxes-heat \
+      	       python3-feelpp-toolboxes-fluid python3-feelpp-toolboxes-solid \
+      	       python3-feelpp-toolboxes-hdg; \
+    fi
+
+# sudo apt remove python3-traitlets python3-jsonschema
+
 # eventually add a web browser
 # RUN apt-get -y install firefox-esr 
 
@@ -71,8 +83,8 @@ ENV SHELL=/bin/bash \
     NB_GID=${NB_GID} \
     LC_ALL=C.UTF-8 \
     LANG=C.UTF-8 \
-    LANGUAGE=C.UTF-8
-ENV PATH="/home/${NB_USER}/jupyterlab-env/bin:${PATH}" \
+    LANGUAGE=C.UTF-8 \
+    PATH="/home/${NB_USER}/jupyterlab-env/bin:${PATH}" \
     HOME="/home/${NB_USER}"
     
 
@@ -92,17 +104,7 @@ RUN useradd --no-log-init --create-home --shell /bin/bash --uid "${NB_UID}" --no
     if [ $(getent group ${VGLUSERS_GID}) ]; then echo "${VGLUSERS} exists"; else groupadd -g ${VGLUSERS_GID} ${VGLUSERS}; fi&& \
     usermod -a -G ${VGLUSERS} ${NB_USER}  && \
     mkdir -p  /etc/sudoers.d/ && \
-    echo "feelpp ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/${NB_USER}
-
-# RUN echo "auth requisite pam_deny.so" >> /etc/pam.d/su && \
-#     sed -i.bak -e 's/^%admin/#%admin/' /etc/sudoers && \
-#     sed -i.bak -e 's/^%sudo/#%sudo/' /etc/sudoers && \
-#     useradd --no-log-init --create-home --shell /bin/bash --uid "${NB_UID}" --no-user-group "${NB_USER}" && \
-#     groupadd -g ${VGLUSERS_GID} vglusers && \
-#     usermod -a -G video ${NB_USER}  && \
-#     usermod -a -G ${VGLUSERS} ${NB_USER}  && \
-#     chmod g+w /etc/passwd && \
-#     fix-permissions "/home/${NB_USER}"
+    echo "${NB_USER} ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/${NB_USER}
 
 # JUPYTER_TOKEN=token
 ENV JUPYTER_PORT=8888
@@ -114,7 +116,7 @@ USER ${NB_UID}
 RUN mkdir "/home/${NB_USER}/work" && \
     fix-permissions "/home/${NB_USER}"
 
-# setup virtualenv for jupyter
+# # setup virtualenv for jupyter
 RUN cd /home/${NB_USER} && \
     python3 -m venv --system-site-packages /home/${NB_USER}/jupyterlab-env && \
     . jupyterlab-env/bin/activate && \
@@ -126,7 +128,7 @@ RUN cd /home/${NB_USER} && \
     deactivate
 
 
-# Copy local files as late as possible to avoid cache busting
+# # Copy local files as late as possible to avoid cache busting
 COPY run-hooks.sh start.sh /usr/local/bin/
 
 USER root
@@ -143,7 +145,7 @@ COPY start-venv.sh ${HOME}
 WORKDIR "${HOME}"
 
 # Configure container entrypoint
-ENTRYPOINT ["tini", "-g", "--", "./start-venv.sh"]
+# ENTRYPOINT ["tini", "-g", "--", "./start-venv.sh"]
 
 # docker run -it --rm --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all  -e DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix -p 8888:8888 --name jupylab jupylab:pip
 # to get access from outside the container: jupyter lab  --ip="0.0.0.0"
